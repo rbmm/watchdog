@@ -1,0 +1,10 @@
+<Solution>
+  <Configurations>
+    <BuildType Name="Release" />
+    <Platform Name="ARM64" />
+    <Platform Name="Win32" />
+    <Platform Name="x64" />
+    <Platform Name="x86" />
+  </Configurations>
+  <Project Path="watchdog\watchdog.vcxproj" Id="ec3948d0-47d9-8330-df66-669dcfc332b4" />
+</Solution>

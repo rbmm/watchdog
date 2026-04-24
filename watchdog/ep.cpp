@@ -10,53 +10,73 @@ void WaitForProcess(HANDLE hProcess, BOOL bMain);
 
 void StartProcess(BOOL bMain)
 {
-	if (PWSTR lpApplicationName = new WCHAR[MINSHORT])
+	STATIC_WSTRING(GLOBALROOT, "\\\\.\\Global\\GLOBALROOT");
+	NTSTATUS status = STATUS_NO_MEMORY;
+	if (PVOID buf = LocalAlloc(LMEM_FIXED, 0x10000))
 	{
-		GetModuleFileNameW(0, lpApplicationName, MINSHORT);
-
-		if (!GetLastError())
+		enum {
+			ecb = (sizeof(GLOBALROOT) - sizeof(WCHAR) - sizeof(UNICODE_STRING) +
+				__alignof(UNICODE_STRING) - 1) & ~(__alignof(UNICODE_STRING) - 1)
+		};
+		SIZE_T s;
+		PUNICODE_STRING ImageName = (PUNICODE_STRING)RtlOffsetToPointer(buf, ecb);
+		if (0 <= (status = NtQueryVirtualMemory(NtCurrentProcess(), &__ImageBase,
+			(MEMORY_INFORMATION_CLASS)MemoryMappedFilenameInformation,
+			ImageName, 0x10000 - ecb - sizeof(WCHAR), &s)))
 		{
-			HANDLE hProcess;
-			STARTUPINFOEXW si = { { sizeof(si) } };
+			*(WCHAR*)RtlOffsetToPointer(ImageName->Buffer, ImageName->Length) = 0;
+			PWSTR lpApplicationName = (PWSTR)((PBYTE)ImageName->Buffer - sizeof(GLOBALROOT) + sizeof(WCHAR));
+			memcpy(lpApplicationName, GLOBALROOT, sizeof(GLOBALROOT) - sizeof(WCHAR));
 
-			SIZE_T s = 0;
-			ULONG dwError;
-			while (ERROR_INSUFFICIENT_BUFFER == (dwError = InitializeProcThreadAttributeList(
+			STARTUPINFOEXW si = { { sizeof(si) } };
+			si.StartupInfo.dwFlags = STARTF_FORCEOFFFEEDBACK;
+
+			s = 0;
+			while (ERROR_INSUFFICIENT_BUFFER == (status = InitializeProcThreadAttributeList(
 				si.lpAttributeList, 1, 0, &s) ? NOERROR : GetLastError()))
 			{
+				if (si.lpAttributeList)
+				{
+					break;
+				}
 				si.lpAttributeList = (LPPROC_THREAD_ATTRIBUTE_LIST)alloca(s);
 			}
 
-			if (NOERROR == dwError && UpdateProcThreadAttribute(si.lpAttributeList, 0,
-				PROC_THREAD_ATTRIBUTE_HANDLE_LIST, &hProcess, sizeof(hProcess), 0, 0) &&
-				DuplicateHandle(NtCurrentProcess(), NtCurrentProcess(), NtCurrentProcess(),
-					&hProcess, 0, TRUE, DUPLICATE_SAME_ACCESS))
+			if (si.lpAttributeList && NOERROR == status)
 			{
-				PWSTR lpCommandLine = 0;
-				int len = 0;
-
-				while (0 < (len = _snwprintf(lpCommandLine, len, L"\n%p\r*%x*", hProcess, bMain)))
+				HANDLE hProcess;
+				if (UpdateProcThreadAttribute(si.lpAttributeList, 0, 
+					PROC_THREAD_ATTRIBUTE_HANDLE_LIST, &hProcess, sizeof(hProcess), 0, 0) &&
+					DuplicateHandle(NtCurrentProcess(), NtCurrentProcess(), NtCurrentProcess(),
+						&hProcess, 0, TRUE, DUPLICATE_SAME_ACCESS))
 				{
-					if (lpCommandLine)
+					PWSTR lpCommandLine = 0;
+					int len = 0;
+
+					while (0 < (len = _snwprintf(lpCommandLine, len, L"\n%p\r*%x*", hProcess, bMain)))
 					{
-						PROCESS_INFORMATION pi;
-						if (CreateProcessW(lpApplicationName, lpCommandLine, 0, 0, TRUE,
-							EXTENDED_STARTUPINFO_PRESENT, 0, 0, &si.StartupInfo, &pi))
+						if (lpCommandLine)
 						{
-							NtClose(pi.hThread);
-							WaitForProcess(pi.hProcess, bMain);
-							NtClose(pi.hProcess);
+							PROCESS_INFORMATION pi;
+							if (CreateProcessW(lpApplicationName, lpCommandLine, 0, 0, TRUE,
+								EXTENDED_STARTUPINFO_PRESENT, 0, 0, &si.StartupInfo, &pi))
+							{
+								NtClose(pi.hThread);
+								WaitForProcess(pi.hProcess, bMain);
+								NtClose(pi.hProcess);
+							}
+							break;
 						}
-						break;
+
+						lpCommandLine = (PWSTR)alloca(++len * sizeof(WCHAR));
 					}
 
-					lpCommandLine = (PWSTR)alloca(++len * sizeof(WCHAR));
+					NtClose(hProcess);
 				}
-
-				NtClose(hProcess);
+				DeleteProcThreadAttributeList(si.lpAttributeList);
 			}
 		}
-		delete[] lpApplicationName;
+		LocalFree(buf);
 	}
 }
 
@@ -108,7 +128,15 @@ void WINAPI ep(void*)
 		StartProcess(!bMain);
 	}
 
-	MessageBoxW(0, 0, bMain ? L"MainApp" : L"Watchdog", bMain ? MB_ICONINFORMATION : MB_ICONWARNING);
+	if (bMain)
+	{
+		MessageBoxW(0, 0, L"Kill Me", MB_ICONINFORMATION);
+	}
+	else
+	{
+		Sleep(INFINITE);
+	}
+
 	ExitProcess(0);
 }
 
